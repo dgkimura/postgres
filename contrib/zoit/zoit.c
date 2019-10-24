@@ -41,6 +41,15 @@ ztbuildempty(Relation index)
 {
 }
 
+static bool
+ztinsert(Relation indexRelation, Datum *values, bool *isnull,
+		 ItemPointer heap_tid, Relation heapRelation,
+		 IndexUniqueCheck checkUnique,
+		 IndexInfo *indexInfo)
+{
+	return false;
+}
+
 Datum
 zthandler(PG_FUNCTION_ARGS)
 {
@@ -65,7 +74,7 @@ zthandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = ztbuild;
 	amroutine->ambuildempty = ztbuildempty;
-	amroutine->aminsert = NULL;
+	amroutine->aminsert = ztinsert;
 	amroutine->ambulkdelete = NULL;
 	amroutine->amvacuumcleanup = NULL;
 	amroutine->amcanreturn = NULL;
