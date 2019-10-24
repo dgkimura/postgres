@@ -1,6 +1,7 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "nodes/pathnodes.h"
 #include "nodes/execnodes.h"
 #include "fmgr.h"
 
@@ -50,6 +51,22 @@ ztinsert(Relation indexRelation, Datum *values, bool *isnull,
 	return false;
 }
 
+static void
+ztcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
+			   Cost *indexStartupCost, Cost *indexTotalCost,
+			   Selectivity *indexSelectivity, double *indexCorrelation,
+			   double *indexPages)
+{
+	/* Tell planner to never use this index! */
+	*indexStartupCost = 1.0e10;
+	*indexTotalCost = 1.0e10;
+
+	/* Do not care about the rest */
+	*indexSelectivity = 1;
+	*indexCorrelation = 0;
+	*indexPages = 1;
+}
+
 Datum
 zthandler(PG_FUNCTION_ARGS)
 {
@@ -78,7 +95,7 @@ zthandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = NULL;
 	amroutine->amvacuumcleanup = NULL;
 	amroutine->amcanreturn = NULL;
-	amroutine->amcostestimate = NULL;
+	amroutine->amcostestimate = ztcostestimate;
 	amroutine->amoptions = ztoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
