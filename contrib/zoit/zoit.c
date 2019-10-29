@@ -58,13 +58,19 @@ ztcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			   double *indexPages)
 {
 	/* Tell planner to never use this index! */
-	*indexStartupCost = 1.0e10;
-	*indexTotalCost = 1.0e10;
+	*indexStartupCost = 0;
+	*indexTotalCost = 0;
 
 	/* Do not care about the rest */
 	*indexSelectivity = 1;
 	*indexCorrelation = 0;
 	*indexPages = 1;
+}
+
+static int64
+ztgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
+{
+	return 0;
 }
 
 Datum
@@ -103,7 +109,7 @@ zthandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = NULL;
 	amroutine->amrescan = NULL;
 	amroutine->amgettuple = NULL;
-	amroutine->amgetbitmap = NULL;
+	amroutine->amgetbitmap = ztgetbitmap;
 	amroutine->amendscan = NULL;
 	amroutine->ammarkpos = NULL;
 	amroutine->amrestrpos = NULL;
