@@ -12,6 +12,7 @@ SET enable_seqscan=off;
 SET enable_bitmapscan=on;
 SET enable_indexscan=on;
 EXPLAIN (COSTS OFF) SELECT * FROM tst WHERE i = 7;
+SELECT * FROM tst WHERE i = 7;
 
 DROP TABLE tst;
 DROP EXTENSION zoit;

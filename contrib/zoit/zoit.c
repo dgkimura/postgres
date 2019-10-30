@@ -73,6 +73,25 @@ ztgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	return 0;
 }
 
+static IndexScanDesc
+ztbeginscan(Relation r, int nkeys, int norderbys)
+{
+	IndexScanDesc scan;
+	scan = RelationGetIndexScan(r, nkeys, norderbys);
+	return scan;
+}
+
+static void
+ztrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
+		 ScanKey orderbys, int norderbys)
+{
+}
+
+static void
+ztendscan(IndexScanDesc scan)
+{
+}
+
 Datum
 zthandler(PG_FUNCTION_ARGS)
 {
@@ -106,11 +125,11 @@ zthandler(PG_FUNCTION_ARGS)
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = NULL;
-	amroutine->ambeginscan = NULL;
-	amroutine->amrescan = NULL;
+	amroutine->ambeginscan = ztbeginscan;
+	amroutine->amrescan = ztrescan;
 	amroutine->amgettuple = NULL;
 	amroutine->amgetbitmap = ztgetbitmap;
-	amroutine->amendscan = NULL;
+	amroutine->amendscan = ztendscan;
 	amroutine->ammarkpos = NULL;
 	amroutine->amrestrpos = NULL;
 	amroutine->amestimateparallelscan = NULL;
