@@ -1,9 +1,20 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "common/relpath.h"
 #include "nodes/pathnodes.h"
 #include "nodes/execnodes.h"
+#include "optimizer/plancat.h"
+#include "storage/block.h"
+#include "storage/bufmgr.h"
 #include "fmgr.h"
+
+typedef struct ZoitPageOpaqueData
+{
+} ZoitPageOpaqueData;
+
+typedef ZoitPageOpaqueData *ZoitPageOpaque;
+
 
 PG_MODULE_MAGIC;
 
@@ -24,13 +35,24 @@ static IndexBuildResult *
 ztbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 {
 	IndexBuildResult *result;
+	Buffer metabuf;
+	Page page;
+
+	/* read page 0 of the index */
+	metabuf = ReadBufferExtended(index, INIT_FORKNUM, 0, RBM_ZERO_AND_LOCK, NULL);
+
+	/* initialize the page */
+	PageInit(BufferGetPage(metabuf), BufferGetPageSize(metabuf), sizeof(ZoitPageOpaqueData));
+	page = BufferGetPage(metabuf);
+
+	LockBuffer(metabuf, BUFFER_LOCK_UNLOCK);
+	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
+	/* all done */
+	UnlockReleaseBuffer(metabuf);
 
 	result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
-
-	/* fill this in with actual data... */
 	result->heap_tuples = 0;
 	result->index_tuples = 0;
-
 	return result;
 }
 
@@ -92,6 +114,12 @@ ztendscan(IndexScanDesc scan)
 {
 }
 
+static IndexBulkDeleteResult *
+ztvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
+{
+	return NULL;
+}
+
 Datum
 zthandler(PG_FUNCTION_ARGS)
 {
@@ -118,7 +146,7 @@ zthandler(PG_FUNCTION_ARGS)
 	amroutine->ambuildempty = ztbuildempty;
 	amroutine->aminsert = ztinsert;
 	amroutine->ambulkdelete = NULL;
-	amroutine->amvacuumcleanup = NULL;
+	amroutine->amvacuumcleanup = ztvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = ztcostestimate;
 	amroutine->amoptions = ztoptions;

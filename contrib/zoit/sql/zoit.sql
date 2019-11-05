@@ -11,6 +11,7 @@ CREATE INDEX zoitidx ON tst USING zoit (i, t);
 SET enable_seqscan=off;
 SET enable_bitmapscan=on;
 SET enable_indexscan=on;
+ANALYZE;
 EXPLAIN (COSTS OFF) SELECT * FROM tst WHERE i = 7;
 SELECT * FROM tst WHERE i = 7;
 
