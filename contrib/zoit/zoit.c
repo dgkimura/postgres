@@ -1,12 +1,15 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "access/generic_xlog.h"
 #include "common/relpath.h"
 #include "nodes/pathnodes.h"
 #include "nodes/execnodes.h"
 #include "optimizer/plancat.h"
 #include "storage/block.h"
 #include "storage/bufmgr.h"
+#include "storage/smgr.h"
+#include "utils/rel.h"
 #include "fmgr.h"
 
 typedef struct ZoitPageOpaqueData
@@ -37,17 +40,17 @@ ztbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	IndexBuildResult *result;
 	Buffer metabuf;
 	Page page;
+	GenericXLogState *state;
 
-	/* read page 0 of the index */
-	metabuf = ReadBufferExtended(index, INIT_FORKNUM, 0, RBM_ZERO_AND_LOCK, NULL);
-
-	/* initialize the page */
-	PageInit(BufferGetPage(metabuf), BufferGetPageSize(metabuf), sizeof(ZoitPageOpaqueData));
-	page = BufferGetPage(metabuf);
-
-	LockBuffer(metabuf, BUFFER_LOCK_UNLOCK);
+	LockRelationForExtension(index, ExclusiveLock);
+	metabuf = ReadBuffer(index, P_NEW);
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
-	/* all done */
+
+	state = GenericXLogStart(index);
+	page = GenericXLogRegisterBuffer(state, metabuf,
+									 GENERIC_XLOG_FULL_IMAGE);
+
+	GenericXLogFinish(state);
 	UnlockReleaseBuffer(metabuf);
 
 	result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));

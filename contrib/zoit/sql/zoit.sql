@@ -1,3 +1,6 @@
+DROP TABLE tst;
+DROP EXTENSION zoit;
+
 CREATE EXTENSION zoit;
 
 CREATE TABLE tst (
@@ -14,6 +17,3 @@ SET enable_indexscan=on;
 ANALYZE;
 EXPLAIN (COSTS OFF) SELECT * FROM tst WHERE i = 7;
 SELECT * FROM tst WHERE i = 7;
-
-DROP TABLE tst;
-DROP EXTENSION zoit;
