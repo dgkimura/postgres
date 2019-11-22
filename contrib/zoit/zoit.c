@@ -9,11 +9,13 @@
 #include "storage/block.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
+#include "storage/lmgr.h"
 #include "utils/rel.h"
 #include "fmgr.h"
 
 typedef struct ZoitPageOpaqueData
 {
+	ItemPointerData heapPtr;
 } ZoitPageOpaqueData;
 
 typedef ZoitPageOpaqueData *ZoitPageOpaque;
@@ -41,6 +43,7 @@ ztbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	Buffer metabuf;
 	Page page;
 	GenericXLogState *state;
+	char *contents;
 
 	LockRelationForExtension(index, ExclusiveLock);
 	metabuf = ReadBuffer(index, P_NEW);
@@ -49,6 +52,10 @@ ztbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	state = GenericXLogStart(index);
 	page = GenericXLogRegisterBuffer(state, metabuf,
 									 GENERIC_XLOG_FULL_IMAGE);
+
+	PageInit(page, BLCKSZ, sizeof(struct ZoitPageOpaqueData));
+	contents = PageGetContents(page);
+	memset(contents, 0, sizeof(struct ZoitPageOpaqueData));
 
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(metabuf);
@@ -73,6 +80,13 @@ ztinsert(Relation indexRelation, Datum *values, bool *isnull,
 		 IndexUniqueCheck checkUnique,
 		 IndexInfo *indexInfo)
 {
+	IndexTuple itup;
+
+	itup = index_form_tuple(RelationGetDescr(indexRelation), values, isnull);
+	itup->t_tid = *heap_tid;
+
+	pfree(itup);
+
 	return false;
 }
 
@@ -102,7 +116,12 @@ static IndexScanDesc
 ztbeginscan(Relation r, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
+
+	/*
+	 * Create an IndexScanDesc
+	 */
 	scan = RelationGetIndexScan(r, nkeys, norderbys);
+
 	return scan;
 }
 
