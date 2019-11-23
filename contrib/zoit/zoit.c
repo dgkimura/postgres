@@ -96,14 +96,17 @@ ztcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			   Selectivity *indexSelectivity, double *indexCorrelation,
 			   double *indexPages)
 {
-	/* Tell planner to never use this index! */
-	*indexStartupCost = 0;
-	*indexTotalCost = 0;
+	GenericCosts costs;
 
-	/* Do not care about the rest */
-	*indexSelectivity = 1;
-	*indexCorrelation = 0;
-	*indexPages = 1;
+	MemSet(&costs, 0, sizeof(costs));
+
+	genericcostestimate(root, path, loop_count, &costs);
+
+	*indexStartupCost = costs.indexStartupCost;
+	*indexTotalCost = costs.indexTotalCost;
+	*indexSelectivity = costs.indexSelectivity;
+	*indexCorrelation = costs.indexCorrelation;
+	*indexPages = costs.numIndexPages;
 }
 
 static int64
