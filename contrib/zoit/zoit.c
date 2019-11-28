@@ -1,5 +1,9 @@
 #include "postgres.h"
 
+#include "access/hash.h"
+#include "access/relscan.h"
+#include "utils/index_selfuncs.h"
+
 #include "access/amapi.h"
 #include "access/generic_xlog.h"
 #include "common/relpath.h"
@@ -11,6 +15,7 @@
 #include "storage/smgr.h"
 #include "storage/lmgr.h"
 #include "utils/rel.h"
+#include "utils/selfuncs.h"
 #include "fmgr.h"
 
 typedef struct ZoitPageOpaqueData
@@ -20,14 +25,13 @@ typedef struct ZoitPageOpaqueData
 
 typedef ZoitPageOpaqueData *ZoitPageOpaque;
 
+#define ZOIT_PAGE 0
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(zthandler);
 
-extern bytea *ztoptions(Datum reloptions, bool validate);
-
-bytea *
+static bytea *
 ztoptions(Datum reloptions, bool validate)
 {
 	return NULL;
@@ -45,9 +49,13 @@ ztbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	GenericXLogState *state;
 	char *contents;
 
+	/* Must extend the file */
 	LockRelationForExtension(index, ExclusiveLock);
+
 	metabuf = ReadBuffer(index, P_NEW);
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
+
+	UnlockRelationForExtension(index, ExclusiveLock);
 
 	state = GenericXLogStart(index);
 	page = GenericXLogRegisterBuffer(state, metabuf,
@@ -81,9 +89,29 @@ ztinsert(Relation indexRelation, Datum *values, bool *isnull,
 		 IndexInfo *indexInfo)
 {
 	IndexTuple itup;
+	Buffer metabuf;
+	Page page;
+	PageHeader pageHeader;
+	ZoitPageOpaqueData *zpage;
+	GenericXLogState *state;
 
 	itup = index_form_tuple(RelationGetDescr(indexRelation), values, isnull);
 	itup->t_tid = *heap_tid;
+
+	metabuf = ReadBuffer(indexRelation, ZOIT_PAGE);
+	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
+
+	state = GenericXLogStart(indexRelation);
+	page = GenericXLogRegisterBuffer(state, metabuf, GENERIC_XLOG_FULL_IMAGE);
+
+	zpage = (ZoitPageOpaqueData *)PageGetContents(page);
+	zpage->heapPtr = itup->t_tid;
+
+	pageHeader = (PageHeader)page;
+	pageHeader->pd_lower = sizeof(PageHeaderData) + sizeof(ZoitPageOpaqueData);
+
+	GenericXLogFinish(state);
+	UnlockReleaseBuffer(metabuf);
 
 	pfree(itup);
 
@@ -120,9 +148,6 @@ ztbeginscan(Relation r, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
 
-	/*
-	 * Create an IndexScanDesc
-	 */
 	scan = RelationGetIndexScan(r, nkeys, norderbys);
 
 	return scan;
@@ -143,6 +168,38 @@ static IndexBulkDeleteResult *
 ztvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 {
 	return NULL;
+}
+
+static bool
+ztgettuple(IndexScanDesc scan, ScanDirection dir)
+{
+	Buffer metabuf;
+	Page page;
+	ZoitPageOpaqueData *zpage;
+
+	static bool first = true;
+
+	metabuf = ReadBuffer(scan->indexRelation, ZOIT_PAGE);
+	LockBuffer(metabuf, BUFFER_LOCK_SHARE);
+
+	page = BufferGetPage(metabuf);
+	zpage = (ZoitPageOpaqueData *)PageGetContents(page);
+
+	scan->xs_heaptid = zpage->heapPtr;
+
+	/* let's pretend we're not lossy.. */
+	scan->xs_recheck = false;
+
+	UnlockReleaseBuffer(metabuf);
+
+	if (first)
+	{
+		first = false;
+		return true;
+	}
+	return false;
+
+	//return true;
 }
 
 Datum
@@ -180,7 +237,7 @@ zthandler(PG_FUNCTION_ARGS)
 	amroutine->amvalidate = NULL;
 	amroutine->ambeginscan = ztbeginscan;
 	amroutine->amrescan = ztrescan;
-	amroutine->amgettuple = NULL;
+	amroutine->amgettuple = ztgettuple;
 	amroutine->amgetbitmap = ztgetbitmap;
 	amroutine->amendscan = ztendscan;
 	amroutine->ammarkpos = NULL;
