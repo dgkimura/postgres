@@ -25,6 +25,12 @@ typedef struct ZoitPageOpaqueData
 
 typedef ZoitPageOpaqueData *ZoitPageOpaque;
 
+typedef struct ZoitScanOpaqueData
+{
+	int index;
+} ZoitScanOpaqueData;
+typedef ZoitScanOpaqueData *ZoitScanOpaque;
+
 #define ZOIT_PAGE 0
 
 PG_MODULE_MAGIC;
@@ -147,8 +153,14 @@ static IndexScanDesc
 ztbeginscan(Relation r, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
+	ZoitScanOpaque so;
 
 	scan = RelationGetIndexScan(r, nkeys, norderbys);
+
+	so = (ZoitScanOpaque) palloc(sizeof(ZoitScanOpaqueData));
+	so->index = -1;
+
+	scan->opaque = so;
 
 	return scan;
 }
@@ -162,6 +174,8 @@ ztrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 static void
 ztendscan(IndexScanDesc scan)
 {
+	ZoitScanOpaque so = (ZoitScanOpaque) scan->opaque;
+	so->index = -1;
 }
 
 static IndexBulkDeleteResult *
@@ -176,8 +190,7 @@ ztgettuple(IndexScanDesc scan, ScanDirection dir)
 	Buffer metabuf;
 	Page page;
 	ZoitPageOpaqueData *zpage;
-
-	static bool first = true;
+	ZoitScanOpaque so = (ZoitScanOpaque) scan->opaque;
 
 	metabuf = ReadBuffer(scan->indexRelation, ZOIT_PAGE);
 	LockBuffer(metabuf, BUFFER_LOCK_SHARE);
@@ -185,21 +198,21 @@ ztgettuple(IndexScanDesc scan, ScanDirection dir)
 	page = BufferGetPage(metabuf);
 	zpage = (ZoitPageOpaqueData *)PageGetContents(page);
 
-	scan->xs_heaptid = zpage->heapPtr;
-
 	/* let's pretend we're not lossy.. */
 	scan->xs_recheck = false;
 
-	UnlockReleaseBuffer(metabuf);
-
-	if (first)
+	if (so->index == -1)
 	{
-		first = false;
+		scan->xs_heaptid = zpage->heapPtr;
+
+		so->index = 0;
+		UnlockReleaseBuffer(metabuf);
 		return true;
 	}
-	return false;
 
-	//return true;
+	UnlockReleaseBuffer(metabuf);
+
+	return false;
 }
 
 Datum
