@@ -19,6 +19,7 @@
 #include <math.h>
 #include <signal.h>
 
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
@@ -39,6 +40,8 @@
 #include "utils/rel.h"
 #include "utils/typcache.h"
 #include "utils/memutils.h"
+#include "utils/numeric.h"
+#include "utils/snapmgr.h"
 
 
 #define EXPECT_TRUE(expr)	\
@@ -888,4 +891,61 @@ test_support_func(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_POINTER(ret);
+}
+
+PG_FUNCTION_INFO_V1(mem_vs_min);
+Datum
+mem_vs_min(PG_FUNCTION_ARGS)
+{
+	Datum		table_oid = PG_GETARG_OID(0);
+
+	HeapTuple htup;
+
+	Relation rel = heap_open(table_oid, AccessShareLock);
+	TupleDesc tupdesc = rel->rd_att;
+
+	Snapshot snapshot = RegisterSnapshot(GetLatestSnapshot());
+	TableScanDesc scan = heap_beginscan(rel, snapshot, 0, NULL, NULL, 0);
+
+	Datum *values = palloc(sizeof(Datum) * tupdesc->natts);
+	bool *nulls = palloc(sizeof(bool) * tupdesc->natts);
+
+	//Datum *nvalues = palloc(sizeof(Datum) * tupdesc->natts);
+	//bool *nnulls = palloc(sizeof(bool) * tupdesc->natts);
+
+	clock_t t, acc = 0;
+	clock_t tform, accform = 0;
+	int totallen = 0;
+
+	TupleTableSlot *slot = MakeTupleTableSlot(tupdesc, &TTSOpsMinimalTuple);
+
+	while ((htup = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		heap_deform_tuple(htup, tupdesc, values, nulls);
+
+		tform = clock();
+		MinimalTuple mintup = heap_form_minimal_tuple(tupdesc, values, nulls);
+		tform = clock() - tform;
+		accform += tform;
+		totallen += mintup->t_len;
+
+		slot = ExecStoreMinimalTuple(mintup, slot, true);
+
+		t = clock();
+		slot_getsomeattrs(slot, tupdesc->natts);
+		t = clock() - t;
+		acc += t;
+
+		//elog(LOG, "values[0] = %s, values[1] = %d", numeric_normalize(DatumGetNumeric(slot->tts_values[0])), DatumGetInt32(slot->tts_values[1]));
+		//elog(LOG, "deform time %f. ", ((double)t)/CLOCKS_PER_SEC);
+	}
+
+	elog(LOG, "deform lenth %d in time %f. time to form %f", totallen, ((double)acc)/CLOCKS_PER_SEC, ((double)accform)/CLOCKS_PER_SEC);
+
+	heap_endscan(scan);
+	UnregisterSnapshot(snapshot);
+	heap_close(rel, AccessShareLock);
+
+
+	PG_RETURN_VOID();
 }
