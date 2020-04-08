@@ -147,6 +147,79 @@ static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static bool ExecParallelHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
 
+static void
+SerialEndBuildHashTable(HashJoinState *node,
+						  HashJoinTable hashtable,
+						  ParallelHashJoinState *parallel_state)
+{
+	node->hj_JoinState = HJ_NEED_NEW_OUTER;
+}
+
+static void
+ParallelEndBuildHashTable(HashJoinState *node,
+						  HashJoinTable hashtable,
+						  ParallelHashJoinState *parallel_state)
+{
+	Barrier    *build_barrier;
+
+	build_barrier = &parallel_state->build_barrier;
+	Assert(BarrierPhase(build_barrier) == PHJ_BUILD_HASHING_OUTER ||
+		   BarrierPhase(build_barrier) == PHJ_BUILD_DONE);
+	if (BarrierPhase(build_barrier) == PHJ_BUILD_HASHING_OUTER)
+	{
+		/*
+		 * If multi-batch, we need to hash the outer relation
+		 * up front.
+		 */
+		if (hashtable->nbatch > 1)
+			ExecParallelHashJoinPartitionOuter(node);
+		BarrierArriveAndWait(build_barrier,
+							 WAIT_EVENT_HASH_BUILD_HASHING_OUTER);
+	}
+	Assert(BarrierPhase(build_barrier) == PHJ_BUILD_DONE);
+
+	/* Each backend should now select a batch to work on. */
+	hashtable->curbatch = -1;
+	node->hj_JoinState = HJ_NEED_NEW_BATCH;
+}
+
+static void
+SerialSetMatchBit(HashJoinState *node)
+{
+	/*
+	 * This is really only needed if HJ_FILL_INNER(node),
+	 * but we'll avoid the branch and just set it always.
+	 */
+	HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
+}
+
+static void
+ParallelSetMatchBit(HashJoinState *node)
+{
+	/*
+	 * Full/right outer joins are currently not supported
+	 * for parallel joins, so we don't need to set the
+	 * match bit.  Experiments show that it's worth
+	 * avoiding the shared memory traffic on large
+	 * systems.
+	 */
+	Assert(!HJ_FILL_INNER(node));
+}
+
+typedef struct HashJoinConfig
+{
+	void (*prepare_outer)(HashJoinState *node,
+								 HashJoinTable hashtable,
+								 ParallelHashJoinState *parallel_state);
+	TupleTableSlot *(*get_outer_tuple)(PlanState *outerNode,
+									  HashJoinState *hjstate,
+									  uint32 *hashvalue);
+	bool (*scan_hash_bucket)(HashJoinState *hjstate,
+									  ExprContext *econtext);
+	void (*set_match_bit)(HashJoinState *node);
+	bool (*get_new_batch)(HashJoinState *hjstate);
+} HashJoinConfig;
+
 
 /* ----------------------------------------------------------------
  *		ExecHashJoinImpl
@@ -162,7 +235,7 @@ static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
  * ----------------------------------------------------------------
  */
 static pg_attribute_always_inline TupleTableSlot *
-ExecHashJoinImpl(PlanState *pstate, bool parallel)
+ExecHashJoinImpl(PlanState *pstate, bool parallel, HashJoinConfig *config)
 {
 	HashJoinState *node = castNode(HashJoinState, pstate);
 	PlanState  *outerNode;
@@ -311,49 +384,15 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 */
 				node->hj_OuterNotEmpty = false;
 
-				if (parallel)
-				{
-					Barrier    *build_barrier;
-
-					build_barrier = &parallel_state->build_barrier;
-					Assert(BarrierPhase(build_barrier) == PHJ_BUILD_HASHING_OUTER ||
-						   BarrierPhase(build_barrier) == PHJ_BUILD_DONE);
-					if (BarrierPhase(build_barrier) == PHJ_BUILD_HASHING_OUTER)
-					{
-						/*
-						 * If multi-batch, we need to hash the outer relation
-						 * up front.
-						 */
-						if (hashtable->nbatch > 1)
-							ExecParallelHashJoinPartitionOuter(node);
-						BarrierArriveAndWait(build_barrier,
-											 WAIT_EVENT_HASH_BUILD_HASHING_OUTER);
-					}
-					Assert(BarrierPhase(build_barrier) == PHJ_BUILD_DONE);
-
-					/* Each backend should now select a batch to work on. */
-					hashtable->curbatch = -1;
-					node->hj_JoinState = HJ_NEED_NEW_BATCH;
-
-					continue;
-				}
-				else
-					node->hj_JoinState = HJ_NEED_NEW_OUTER;
-
-				/* FALL THRU */
+				config->prepare_outer(node, hashtable, parallel_state);
+				break;
 
 			case HJ_NEED_NEW_OUTER:
 
 				/*
 				 * We don't have an outer tuple, try to get the next one
 				 */
-				if (parallel)
-					outerTupleSlot =
-						ExecParallelHashJoinOuterGetTuple(outerNode, node,
-														  &hashvalue);
-				else
-					outerTupleSlot =
-						ExecHashJoinOuterGetTuple(outerNode, node, &hashvalue);
+				outerTupleSlot = config->get_outer_tuple(outerNode, node, &hashvalue);
 
 				if (TupIsNull(outerTupleSlot))
 				{
@@ -420,23 +459,11 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				/*
 				 * Scan the selected hash bucket for matches to current outer
 				 */
-				if (parallel)
+				if (!config->scan_hash_bucket(node, econtext))
 				{
-					if (!ExecParallelScanHashBucket(node, econtext))
-					{
-						/* out of matches; check for possible outer-join fill */
-						node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
-						continue;
-					}
-				}
-				else
-				{
-					if (!ExecScanHashBucket(node, econtext))
-					{
-						/* out of matches; check for possible outer-join fill */
-						node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
-						continue;
-					}
+					/* out of matches; check for possible outer-join fill */
+					node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
+					continue;
 				}
 
 				/*
@@ -455,25 +482,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				{
 					node->hj_MatchedOuter = true;
 
-					if (parallel)
-					{
-						/*
-						 * Full/right outer joins are currently not supported
-						 * for parallel joins, so we don't need to set the
-						 * match bit.  Experiments show that it's worth
-						 * avoiding the shared memory traffic on large
-						 * systems.
-						 */
-						Assert(!HJ_FILL_INNER(node));
-					}
-					else
-					{
-						/*
-						 * This is really only needed if HJ_FILL_INNER(node),
-						 * but we'll avoid the branch and just set it always.
-						 */
-						HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
-					}
+					config->set_match_bit(node);
 
 					/* In an antijoin, we never return a matched tuple */
 					if (node->js.jointype == JOIN_ANTI)
@@ -555,15 +564,9 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				/*
 				 * Try to advance to next batch.  Done if there are no more.
 				 */
-				if (parallel)
+				if (!config->get_new_batch(node))
 				{
-					if (!ExecParallelHashJoinNewBatch(node))
-						return NULL;	/* end of parallel-aware join */
-				}
-				else
-				{
-					if (!ExecHashJoinNewBatch(node))
-						return NULL;	/* end of parallel-oblivious join */
+					return NULL;	/* end of parallel join */
 				}
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 				break;
@@ -584,11 +587,19 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 static TupleTableSlot *			/* return: a tuple or NULL */
 ExecHashJoin(PlanState *pstate)
 {
+	HashJoinConfig context = {
+		.prepare_outer = SerialEndBuildHashTable,
+		.get_outer_tuple = ExecHashJoinOuterGetTuple,
+		.scan_hash_bucket = ExecScanHashBucket,
+		.set_match_bit = SerialSetMatchBit,
+		.get_new_batch = ExecHashJoinNewBatch
+	};
+
 	/*
 	 * On sufficiently smart compilers this should be inlined with the
 	 * parallel-aware branches removed.
 	 */
-	return ExecHashJoinImpl(pstate, false);
+	return ExecHashJoinImpl(pstate, false, &context);
 }
 
 /* ----------------------------------------------------------------
@@ -600,11 +611,19 @@ ExecHashJoin(PlanState *pstate)
 static TupleTableSlot *			/* return: a tuple or NULL */
 ExecParallelHashJoin(PlanState *pstate)
 {
+	HashJoinConfig context = {
+		.prepare_outer = ParallelEndBuildHashTable,
+		.get_outer_tuple = ExecParallelHashJoinOuterGetTuple,
+		.scan_hash_bucket = ExecParallelScanHashBucket,
+		.set_match_bit = ParallelSetMatchBit,
+		.get_new_batch = ExecParallelHashJoinNewBatch,
+	};
+
 	/*
 	 * On sufficiently smart compilers this should be inlined with the
 	 * parallel-oblivious branches removed.
 	 */
-	return ExecHashJoinImpl(pstate, true);
+	return ExecHashJoinImpl(pstate, true, &context);
 }
 
 /* ----------------------------------------------------------------
