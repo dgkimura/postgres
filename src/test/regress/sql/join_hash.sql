@@ -635,3 +635,22 @@ ORDER BY 1, 2;
 
 EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside
 FULL OUTER JOIN hashside_wide USING (a);
+
+-- Test test that spills batch 0 gives correct results.
+SET fixed_batch_size TO 8;
+
+CREATE TABLE probeside_batch0(a stub);
+ALTER TABLE probeside_batch0 ALTER COLUMN a SET STORAGE PLAIN;
+INSERT INTO probeside_batch0 SELECT '(0, "")' FROM generate_series(1, 2);
+INSERT INTO probeside_batch0 SELECT '(0, "unmatched outer")' FROM generate_series(1, 1);
+
+CREATE TABLE hashside_wide_batch0(a stub, id int);
+ALTER TABLE hashside_wide_batch0 ALTER COLUMN a SET STORAGE PLAIN;
+INSERT INTO hashside_wide_batch0 SELECT '(0, "")', 1 FROM generate_series(1, 9);
+INSERT INTO probeside_batch0 SELECT '(0, "unmatched inner")' FROM generate_series(1, 1);
+ANALYZE probeside_batch0, hashside_wide_batch0;
+
+SELECT (probeside_batch0.a).hash, ((((probeside_batch0.a).hash << 7) >> 3) & 31) AS batchno, TRIM((probeside_batch0.a).value), hashside_wide_batch0.id, hashside_wide_batch0.ctid, (hashside_wide_batch0.a).hash, TRIM((hashside_wide_batch0.a).value)
+FROM probeside_batch0
+LEFT OUTER JOIN hashside_wide_batch0 USING (a)
+ORDER BY 1, 2, 3, 4, 5;
