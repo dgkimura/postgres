@@ -443,7 +443,7 @@ $$
 $$);
  original | final 
 ----------+-------
-        1 |     2
+        1 |     4
 (1 row)
 
 rollback to settings;
@@ -478,7 +478,7 @@ $$
 $$);
  original | final 
 ----------+-------
-        1 |     2
+        1 |     4
 (1 row)
 
 rollback to settings;

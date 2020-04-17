@@ -1065,6 +1065,13 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 #endif
 
 	/*
+	 * For now we do not support fallback in batch 0 as it is a special case
+	 * and assumed to fit in hashtable.
+	 */
+	if (curbatch == 0)
+		return;
+
+	/*
 	 * The same batch should not be marked to fall back more than once
 	 */
 	childbatch_frac = childbatch_outgoing_tuples / (float) ninmemory;
