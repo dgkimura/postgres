@@ -1227,6 +1227,7 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 						dsa_get_address(hashtable->area, old_batch0->buckets);
 					for (i = 0; i < hashtable->nbuckets; ++i)
 						dsa_pointer_atomic_write(&buckets[i], InvalidDsaPointer);
+					hashtable->batches[0].shared->space_exhausted = old_batch0->space_exhausted;
 				}
 
 				/* Move all chunks to the work queue for parallel processing. */
@@ -1803,7 +1804,7 @@ ExecParallelHashTableInsert(HashJoinTable hashtable,
 retry:
 	ExecHashGetBucketAndBatch(hashtable, hashvalue, &bucketno, &batchno);
 
-	if (batchno == 0)
+	if (batchno == 0 && !hashtable->batches[0].shared->hashloop_fallback)
 	{
 		/*
 		 * TODO: if spilling is enabled for batch 0 so that it can fall back,
@@ -1835,8 +1836,6 @@ retry:
 		size_t		tuple_size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 		ParallelHashJoinBatch *batch;
 		tupleMetadata metadata;
-
-		Assert(batchno > 0);
 
 		/* Try to preallocate space in the batch if necessary. */
 
@@ -3499,7 +3498,6 @@ ExecParallelHashTuplePrealloc(HashJoinTable hashtable, int batchno, size_t size)
 	ParallelHashJoinBatchAccessor *batch = &hashtable->batches[batchno];
 	size_t		want = Max(size, HASH_CHUNK_SIZE - HASH_CHUNK_HEADER_SIZE);
 
-	Assert(batchno > 0);
 	Assert(batchno < hashtable->nbatch);
 	Assert(size == MAXALIGN(size));
 
@@ -3556,6 +3554,14 @@ ExecParallelHashTuplePrealloc(HashJoinTable hashtable, int batchno, size_t size)
 			batch->shared->estimated_stripe_size = 0;
 		}
 		LWLockRelease(&batch->shared->lock);
+	}
+	else if (batchno == 0 && pstate->growth == PHJ_GROWTH_OK &&
+			 batch->shared->size + want + HASH_CHUNK_HEADER_SIZE
+			 > pstate->space_allowed && batch->shared->hashloop_fallback)
+	{
+		/* FIXME: Look at locks */
+		batch->shared->maximum_stripe_number++;
+		batch->shared->estimated_stripe_size = 0;
 	}
 
 	batch->at_least_one_chunk = true;
