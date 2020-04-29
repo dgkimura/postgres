@@ -925,6 +925,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	int			childbatch_outgoing_tuples;
 	int			target_batch;
 	FallbackBatchStats *fallback_batch_stats;
+	size_t		currentBatchSize = 0;
 
 	if (hashtable->hashloop_fallback && hashtable->hashloop_fallback[curbatch])
 		return;
@@ -1029,7 +1030,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 			ExecHashGetBucketAndBatch(hashtable, hashTuple->hashvalue,
 									  &bucketno, &batchno);
 
-			if (batchno == curbatch)
+			if (batchno == curbatch && (curbatch != 0 || currentBatchSize + hashTupleSize < hashtable->spaceAllowed))
 			{
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
@@ -1041,11 +1042,12 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				copyTuple->next.unshared = hashtable->buckets.unshared[bucketno];
 				hashtable->buckets.unshared[bucketno] = copyTuple;
 				curbatch_outgoing_tuples++;
+				currentBatchSize += hashTupleSize;
 			}
 			else
 			{
 				/* dump it out */
-				Assert(batchno > curbatch);
+				Assert(batchno > curbatch || currentBatchSize + hashTupleSize >= hashtable->spaceAllowed);
 				ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
 									  hashTuple->hashvalue,
 									  &hashtable->innerBatchFile[batchno]);
@@ -1082,13 +1084,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 #endif
 
 	/*
-	 * For now we do not support fallback in batch 0 as it is a special case
-	 * and assumed to fit in hashtable.
-	 */
-	if (curbatch == 0)
-		return;
-
-	/*
 	 * The same batch should not be marked to fall back more than once
 	 */
 #ifdef HJDEBUG
@@ -1097,9 +1092,9 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	if ((curbatch_outgoing_tuples / (float) ninmemory) >= 0.8)
 		printf("curbatch %i targeted to fallback.", curbatch);
 #endif
-	if ((childbatch_outgoing_tuples / (float) ninmemory) >= MAX_RELOCATION && childbatch > 0)
+	if ((childbatch_outgoing_tuples / (float) ninmemory) >= MAX_RELOCATION)
 		target_batch = childbatch;
-	else if ((curbatch_outgoing_tuples / (float) ninmemory) >= MAX_RELOCATION && curbatch > 0)
+	else if ((curbatch_outgoing_tuples / (float) ninmemory) >= MAX_RELOCATION)
 		target_batch = curbatch;
 	else
 		return;
