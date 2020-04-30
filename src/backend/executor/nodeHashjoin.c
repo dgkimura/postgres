@@ -296,6 +296,8 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 */
 				Assert(hashtable == NULL);
 
+				//int mybp=0; while (mybp==0){}
+
 				/*
 				 * If the outer relation is completely empty, and it's not
 				 * right/full join, we can quit without building the hash

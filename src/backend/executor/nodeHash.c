@@ -1304,7 +1304,8 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					 */
 					if (batch->space_exhausted ||
 						batch->estimated_size > pstate->space_allowed ||
-						batch->size > pstate->space_allowed)
+						batch->size > pstate->space_allowed ||
+						batch->estimated_size + batch->size > pstate->space_allowed)
 					{
 						int			parent;
 						float		frac_moved;
@@ -1371,12 +1372,16 @@ ExecParallelHashRepartitionFirst(HashJoinTable hashtable)
 			dsa_pointer shared;
 			int			bucketno;
 			int			batchno;
+			size_t		tuple_size =
+			MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 			ExecHashGetBucketAndBatch(hashtable, hashTuple->hashvalue,
 									  &bucketno, &batchno);
 
+			ParallelHashJoinBatch *batch = hashtable->batches[batchno].shared;
+
 			Assert(batchno < hashtable->nbatch);
-			if (batchno == 0)
+			if (batchno == 0 && batch->size + tuple_size < hashtable->parallel_state->space_allowed)
 			{
 				/* It still belongs in batch 0.  Copy to a new chunk. */
 				copyTuple =
@@ -1390,12 +1395,9 @@ ExecParallelHashRepartitionFirst(HashJoinTable hashtable)
 			}
 			else
 			{
-				size_t		tuple_size =
-				MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 				tupleMetadata metadata;
 
 				/* It belongs in a later batch. */
-				ParallelHashJoinBatch *batch = hashtable->batches[batchno].shared;
 
 				LWLockAcquire(&batch->lock, LW_EXCLUSIVE);
 
@@ -1414,6 +1416,9 @@ ExecParallelHashRepartitionFirst(HashJoinTable hashtable)
 				hashtable->batches[batchno].estimated_size += tuple_size;
 
 				sts_puttuple(hashtable->batches[batchno].inner_tuples, &metadata, tuple);
+
+				///* TODO: Move this out... */
+				//sts_parallel_scan_rewind(hashtable->batches[batchno].inner_tuples);
 			}
 
 			/* Count this tuple. */
@@ -3120,20 +3125,6 @@ ExecParallelHashJoinSetUpBatches(HashJoinTable hashtable, int nbatch)
 		 */
 		BarrierInit(&shared->batch_barrier, 0);
 		BarrierInit(&shared->stripe_barrier, 0);
-
-		/* Batch 0 doesn't need to be loaded. */
-		if (i == 0)
-		{
-			BarrierAttach(&shared->batch_barrier);
-			while (BarrierPhase(&shared->batch_barrier) < PHJ_BATCH_STRIPING)
-				BarrierArriveAndWait(&shared->batch_barrier, 0);
-			BarrierDetach(&shared->batch_barrier);
-
-			BarrierAttach(&shared->stripe_barrier);
-			while (BarrierPhase(&shared->stripe_barrier) < PHJ_STRIPE_PROBING)
-				BarrierArriveAndWait(&shared->stripe_barrier, 0);
-			BarrierDetach(&shared->stripe_barrier);
-		}
 
 		/* Initialize accessor state.  All members were zero-initialized. */
 		accessor->shared = shared;
