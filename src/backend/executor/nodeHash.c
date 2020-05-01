@@ -189,6 +189,14 @@ MultiExecPrivateHash(HashState *node)
 		}
 	}
 
+	if (hashtable->innerBatchFile && hashtable->innerBatchFile[0])
+	{
+		if (BufFileSeek(hashtable->innerBatchFile[0], 0, 0L, SEEK_SET))
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not rewind hash-join temporary file: %m")));
+	}
+
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
 		ExecHashIncreaseNumBuckets(hashtable);

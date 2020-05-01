@@ -1272,13 +1272,6 @@ ExecHashJoinLoadStripe(HashJoinState *hjstate)
 					(errcode_for_file_access(),
 					 errmsg("could not rewind hash-join temporary file: %m")));
 	}
-	if (hashtable->innerBatchFile && hashtable->innerBatchFile[curbatch] && hashtable->curbatch == 0 && hashtable->curstripe == 0)
-	{
-		if (BufFileSeek(hashtable->innerBatchFile[curbatch], 0, 0L, SEEK_SET))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not rewind hash-join temporary file: %m")));
-	}
 
 	hashtable->curstripe++;
 
