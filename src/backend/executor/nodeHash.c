@@ -183,7 +183,23 @@ MultiExecPrivateHash(HashState *node)
 			else
 			{
 				/* Not subject to skew optimization, so insert normally */
-				ExecHashTableInsert(hashtable, slot, hashvalue);
+				int			bucketno;
+				int			batchno;
+				bool		shouldFree;
+				MinimalTuple tuple = ExecFetchSlotMinimalTuple(slot, &shouldFree);
+
+				ExecHashGetBucketAndBatch(hashtable, hashvalue,
+							  &bucketno, &batchno);
+				if (hashtable->hashloop_fallback && hashtable->hashloop_fallback[0])
+					ExecHashJoinSaveTuple(tuple,
+										  hashvalue,
+										  &hashtable->innerBatchFile[batchno]);
+				else
+					ExecHashTableInsert(hashtable, slot, hashvalue);
+
+				if (shouldFree)
+					heap_free_minimal_tuple(tuple);
+
 			}
 			hashtable->totalTuples += 1;
 		}
