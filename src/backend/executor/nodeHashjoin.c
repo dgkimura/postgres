@@ -509,23 +509,6 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					/* Loop around, staying in HJ_NEED_NEW_OUTER state */
 					continue;
 				}
-				if (batchno == 0 && node->hj_HashTable->curstripe == 0 && IsHashloopFallback(hashtable))
-				{
-					bool		shouldFree;
-					MinimalTuple mintuple = ExecFetchSlotMinimalTuple(outerTupleSlot,
-																	  &shouldFree);
-
-					/*
-					 * Need to save this outer tuple to a batch since batch 0
-					 * is fallback and we must later rewind.
-					 */
-					Assert(parallel_state == NULL);
-					ExecHashJoinSaveTuple(mintuple, hashvalue,
-										  &hashtable->outerBatchFile[batchno]);
-
-					if (shouldFree)
-						heap_free_minimal_tuple(mintuple);
-				}
 
 				/*
 				 * While probing the phantom stripe, don't increment
@@ -1347,6 +1330,7 @@ ExecHashJoinLoadStripe(HashJoinState *hjstate)
 		hjstate->hj_EmitOuterTupleId = 0;
 		hjstate->hj_CurOuterMatchStatus = 0;
 		BufFileSeek(hashtable->hashloop_fallback[curbatch], 0, 0, SEEK_SET);
+		if (hashtable->outerBatchFile[curbatch])
 		BufFileSeek(hashtable->outerBatchFile[curbatch], 0, 0L, SEEK_SET);
 		return true;
 	}

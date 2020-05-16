@@ -320,27 +320,6 @@ MultiExecParallelHash(HashState *node)
 				 * skew).
 				 */
 				pstate->growth = PHJ_GROWTH_DISABLED;
-
-				/*
-				 * In the current design, batch 0 cannot fall back. That
-				 * behavior is an artifact of the existing design where batch
-				 * 0 fills the initial hash table and as an optimization it
-				 * doesn't need a batch file. But, there is no real reason
-				 * that batch 0 shouldn't be allowed to spill.
-				 *
-				 * Consider a hash table where majority of tuples with
-				 * hashvalue 0. These tuples will never relocate no matter how
-				 * many batches exist. If you cannot exceed work_mem, then you
-				 * will be stuck infinitely trying to double the number of
-				 * batches in order to accommodate the tuples that can only
-				 * ever be in batch 0. So, we allow it to be set to fall back
-				 * during the build phase to avoid excessive batch increases
-				 * but we don't check it when loading the actual tuples, so we
-				 * may exceed space_allowed. We set it back to false here so
-				 * that it isn't true during any of the checks that may happen
-				 * during probing.
-				 */
-				hashtable->batches[0].shared->hashloop_fallback = false;
 			}
 	}
 
@@ -1286,7 +1265,6 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					 * All batches were just created anew during
 					 * repartitioning
 					 */
-					Assert(!batch->hashloop_fallback);
 
 					/*
 					 * At the time of repartitioning, each batch updates its
@@ -1305,7 +1283,7 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					if (batch->space_exhausted ||
 						batch->estimated_size > pstate->space_allowed ||
 						batch->size > pstate->space_allowed ||
-						batch->estimated_size + batch->size > pstate->space_allowed)
+						batch->estimated_size > pstate->space_allowed)
 					{
 						int			parent;
 						float		frac_moved;
@@ -1392,8 +1370,9 @@ ExecParallelHashRepartitionFirst(HashJoinTable hashtable)
 				memcpy(HJTUPLE_MINTUPLE(copyTuple), tuple, tuple->t_len);
 				ExecParallelHashPushTuple(&hashtable->buckets.shared[bucketno],
 										  copyTuple, shared);
+				batch->estimated_stripe_size += tuple_size;
 			}
-			else
+			//else
 			{
 				tupleMetadata metadata;
 
@@ -1405,6 +1384,7 @@ ExecParallelHashRepartitionFirst(HashJoinTable hashtable)
 				{
 					batch->maximum_stripe_number++;
 					batch->estimated_stripe_size = 0;
+					batch->hashloop_fallback = true;
 				}
 
 				batch->estimated_stripe_size += tuple_size;
@@ -3007,7 +2987,6 @@ ExecParallelHashTupleAlloc(HashJoinTable hashtable, size_t size,
 			chunk_size > pstate->space_allowed)
 		{
 			pstate->growth = PHJ_GROWTH_NEED_MORE_BATCHES;
-			hashtable->batches[0].shared->space_exhausted = true;
 			LWLockRelease(&pstate->lock);
 
 			return NULL;
