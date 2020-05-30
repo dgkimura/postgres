@@ -1800,6 +1800,8 @@ ExecParallelHashTableInsert(HashJoinTable hashtable,
 	dsa_pointer shared;
 	int			bucketno;
 	int			batchno;
+	ParallelHashJoinBatch *batch;
+	tupleMetadata metadata;
 
 retry:
 	ExecHashGetBucketAndBatch(hashtable, hashvalue, &bucketno, &batchno);
@@ -1834,8 +1836,6 @@ retry:
 	else
 	{
 		size_t		tuple_size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
-		ParallelHashJoinBatch *batch;
-		tupleMetadata metadata;
 
 		Assert(batchno > 0);
 
@@ -1853,15 +1853,19 @@ retry:
 
 		Assert(hashtable->batches[batchno].preallocated >= tuple_size);
 		hashtable->batches[batchno].preallocated -= tuple_size;
-		batch = hashtable->batches[batchno].shared;
-
-		metadata.hashvalue = hashvalue;
-		LWLockAcquire(&batch->lock, LW_SHARED);
-		metadata.stripe = batch->maximum_stripe_number;
-		LWLockRelease(&batch->lock);
-
-		sts_puttuple(hashtable->batches[batchno].inner_tuples, &metadata, tuple);
 	}
+
+	/*
+	 * FIXME: Probably only do this iff batch 0 spills...
+	 */
+	batch = hashtable->batches[batchno].shared;
+
+	metadata.hashvalue = hashvalue;
+	LWLockAcquire(&batch->lock, LW_SHARED);
+	metadata.stripe = batch->maximum_stripe_number;
+	LWLockRelease(&batch->lock);
+
+	sts_puttuple(hashtable->batches[batchno].inner_tuples, &metadata, tuple);
 	++hashtable->batches[batchno].ntuples;
 
 	if (shouldFree)
